@@ -1,26 +1,27 @@
 # Local setup
 
-Use this when adapting the handset to another Dot, another LAN, another Mac, or another Grok Bot agent. The human order is README sections 1 through 7. Follow that order. A local setup is environment plus two installed files. Python defaults stay empty.
+Use this when adapting the handset to another Dot, another LAN, another Mac, or another Grok Bot agent. The human order is README sections 1 through 7. One Mac runs the mint and the bridge. A Linux bridge is the later section of the README, and only when the user asks for that split. Python defaults stay empty.
 
 ## Collect
 
 Ask for each value. Do not invent one, and do not copy one out of a different checkout.
 
 - `DOT_IP` from `wpa_cli status` after README section 2 (`ip_address`).
-- Bridge LAN address, for `DOT_ADB_ALLOW`.
-- `ADB` path on the bridge. `adb` on `PATH` is valid.
-- Mac `user@host` reachable from the bridge on the LAN, and the SSH private key path on the bridge.
-- Absolute path of this repo on the Mac and on the bridge. Launchd does not expand `~`.
+- The Mac's LAN address, for `DOT_ADB_ALLOW`.
+- `ADB` path on the Mac. Platform-tools, not a system path you invent.
+- Absolute path of this repo on the Mac. Launchd does not expand `~`.
 - `GROK_AGENT_ID` and `GROK_AGENT_NAME` from `python3 mint_grok.py --list-agents`, run in the Mac GUI session. The line is `uuid`, name, `voiceId`.
+
+Linux split, only if asked: the Linux box's LAN address replaces the Mac's in `DOT_ADB_ALLOW`, plus `DOT_MINT_SSH` and `DOT_MINT_KEY`. The mint stays on the Mac.
 
 ## Write
 
-Copy, then edit the copies:
+Copy, then edit the copies. Both land in `~/Library/LaunchAgents/` on the Mac:
 
-- Bridge: `examples/dot-voice.service` to `~/.config/systemd/user/dot-voice.service`. Then `systemctl --user daemon-reload` and `enable --now`. `loginctl enable-linger` for the bridge user.
-- Mac: `examples/com.example.dot-grok-mint.plist` to `~/Library/LaunchAgents/`. Set `ProgramArguments`, both log paths, `GROK_AGENT_ID`, `GROK_AGENT_NAME`. `launchctl bootstrap gui/$(id -u)`.
+- `examples/com.example.dot-grok-mint.plist` with `ProgramArguments`, both log paths, `GROK_AGENT_ID`, `GROK_AGENT_NAME`.
+- `examples/com.example.dot-voice.plist` with `ADB`, `DOT_IP`, `DOT_SERIAL`, `DOT_ADB_ALLOW`. Leave `DOT_MINT_SSH` unset.
 
-Tracked `examples/` keep `192.0.2.0/24`, `/home/you`, `/Users/YOU`, the zero uuid, and `Your agent`.
+`launchctl bootstrap gui/$(id -u)` for each. The bridge plist starts under `caffeinate -ims`.
 
 Mint bearer, on the Mac:
 
@@ -29,7 +30,9 @@ openssl rand -hex 32 > ~/.config/dot-voice/mint.token
 chmod 600 ~/.config/dot-voice/mint.token
 ```
 
-Bridge key: `ssh-keygen -t ed25519 -f ~/.ssh/dot-mint -N ""`. Mac `authorized_keys` line is in README section 5. `mint-client.sh` is executable.
+Linux split: `examples/dot-voice.service` on the Linux box, with `DOT_MINT_SSH` and `DOT_MINT_KEY` set. The forced SSH command is README section "Bridge on Linux". Stop the Mac bridge first. One adb client.
+
+Tracked `examples/` keep `192.0.2.0/24`, `/home/you`, `/Users/YOU`, the zero uuid, and `Your agent`.
 
 ## Done when
 
@@ -38,9 +41,10 @@ All of these are true:
 1. `python3 dot_voice.py --self-check` prints `self-check ok 22c3ec84`.
 2. `python3 mint_grok.py --self-check` prints `list-check ok`.
 3. The mint log contains `listening 19773`.
-4. From the bridge, `ssh -i "$DOT_MINT_KEY" -o IdentitiesOnly=yes "$DOT_MINT_SSH" mint` exits 0 and the body is JSON. Leave that body on the terminal. It is a call secret.
-5. The bridge log contains `handset up. unmute opens the line. mute closes it.` The lift click played, and no call was opened by the restart.
-6. Unmute opens a call. Mute while the line is only listening hangs up.
+4. The bridge log contains `handset up. unmute opens the line. mute closes it.` The lift click played, and no call was opened by the restart.
+5. Unmute opens a call. Mute while the line is only listening hangs up.
+
+Linux split, instead of item 4's local token: `ssh -i "$DOT_MINT_KEY" -o IdentitiesOnly=yes "$DOT_MINT_SSH" mint` exits 0 and the body is JSON. Leave that body on the terminal. It is a call secret.
 
 ## Leave these alone
 

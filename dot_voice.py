@@ -3,9 +3,10 @@
 Mute while a reply is playing cuts it and listens. Mute while
 listening hangs up.
 
-The call is minted by the Grok Bot app on a Mac (grok-voice-synapse).
-That Mac's keychain stays there. This process only receives a short-lived
-call secret over SSH and throws it away when the call ends.
+The call is minted by the Grok Bot app on this Mac (grok-voice-synapse).
+The keychain stays in that GUI session. This process asks the local mint
+on 127.0.0.1 and throws the call secret away when the call ends.
+Set DOT_MINT_SSH to run this process on another machine instead.
 """
 
 import array
@@ -23,6 +24,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 # ponytail: fixed 6x. Room floor on this mic is about 10, and a voice that
@@ -48,6 +51,10 @@ ALLOW = tuple(
 )
 MINT_SSH = os.environ.get("DOT_MINT_SSH", "").strip()
 MINT_KEY = os.environ.get("DOT_MINT_KEY", "").strip()
+MINT_URL = os.environ.get("DOT_MINT_URL", "http://127.0.0.1:19773").rstrip("/")
+TOKEN_PATH = os.path.expanduser(
+    os.environ.get("DOT_MINT_TOKEN", "~/.config/dot-voice/mint.token")
+)
 
 
 def _ipv4(text):
@@ -589,12 +596,54 @@ def _mint_ssh(remote, timeout):
     )
 
 
+def _mint_parts(remote):
+    if remote == "mint":
+        return "mint", None
+    if remote.startswith("tool "):
+        return "tool", base64.b64decode(remote.split(" ", 1)[1])
+    raise RuntimeError("mint")
+
+
+def _mint_local(remote, timeout):
+    try:
+        token = open(TOKEN_PATH).read().strip()
+    except OSError:
+        token = ""
+    if not token:
+        return subprocess.CompletedProcess([], 1, b"", b"")
+    try:
+        kind, raw = _mint_parts(remote)
+    except (RuntimeError, ValueError):
+        return subprocess.CompletedProcess([], 1, b"", b"")
+    headers = {"Authorization": "Bearer " + token}
+    if kind == "tool":
+        headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(MINT_URL + "/tool", data=raw, headers=headers)
+    else:
+        req = urllib.request.Request(MINT_URL + "/mint", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return subprocess.CompletedProcess([], 0, resp.read(), b"")
+    except urllib.error.HTTPError as exc:
+        return subprocess.CompletedProcess([], exc.code, exc.read(), b"")
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return subprocess.CompletedProcess([], 1, b"", b"")
+
+
+def _mint(remote, timeout):
+    if MINT_SSH:
+        return _mint_ssh(remote, timeout)
+    return _mint_local(remote, timeout)
+
+
 def fetch_mint():
-    if not MINT_SSH or not MINT_KEY:
+    if MINT_SSH and not MINT_KEY:
         raise RuntimeError("mint ssh")
-    proc = _mint_ssh("mint", 40)
+    if not MINT_SSH and not os.path.isfile(TOKEN_PATH):
+        raise RuntimeError("mint token")
+    proc = _mint("mint", 40)
     if proc.returncode != 0 or not proc.stdout.strip():
-        raise RuntimeError("mint ssh failed")
+        raise RuntimeError("mint failed")
     try:
         data = json.loads(proc.stdout.decode())
     except json.JSONDecodeError:
@@ -631,7 +680,7 @@ def fetch_mint():
 
 
 def fetch_tool(call_id, name, raw_args):
-    # One SSH per tool. The audio loop does not wait on this.
+    # One mint call per tool. The audio loop does not wait on this.
     try:
         incoming = json.loads(raw_args) if raw_args else {}
     except json.JSONDecodeError:
@@ -649,9 +698,9 @@ def fetch_tool(call_id, name, raw_args):
             "alreadySpokeThisTurn": False,
         },
     }).encode()
-    proc = _mint_ssh("tool " + base64.b64encode(body).decode(), 40)
+    proc = _mint("tool " + base64.b64encode(body).decode(), 40)
     if proc.returncode != 0 or not proc.stdout.strip():
-        raise RuntimeError("tool ssh failed")
+        raise RuntimeError("tool failed")
     try:
         data = json.loads(proc.stdout.decode())
     except json.JSONDecodeError:
@@ -763,8 +812,10 @@ def _pump(proc, lines):
 def run():
     if not SERIAL:
         sys.exit("set DOT_IP")
-    if not MINT_SSH or not MINT_KEY:
-        sys.exit("set DOT_MINT_SSH and DOT_MINT_KEY")
+    if MINT_SSH and not MINT_KEY:
+        sys.exit("set DOT_MINT_KEY")
+    if not MINT_SSH and not os.path.isfile(TOKEN_PATH):
+        sys.exit("set DOT_MINT_TOKEN")
     connect_adb()
     lock_adb_port()
     light_q = queue.Queue()
@@ -1267,6 +1318,9 @@ def self_check():
     assert not _ipv4("192.0.2.10;id")
     assert not _ipv4("192.0.2")
     assert not _ipv4("01.2.3.4")
+    kind, raw = _mint_parts("tool " + base64.b64encode(b'{"a":1}').decode())
+    assert kind == "tool" and json.loads(raw) == {"a": 1}
+    assert _mint_parts("mint") == ("mint", None)
     digest = hashlib.sha256(tone(440, 100)).hexdigest()[:8]
     assert digest == "22c3ec84"
     print("self-check ok", digest)

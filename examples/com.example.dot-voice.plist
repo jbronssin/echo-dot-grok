@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.example.dot-voice</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/caffeinate</string>
+		<string>-ims</string>
+		<string>/usr/bin/python3</string>
+		<string>/Users/YOU/echo-dot-grok/dot_voice.py</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/YOU/echo-dot-grok</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>ADB</key>
+		<string>/Users/YOU/platform-tools/adb</string>
+		<key>DOT_IP</key>
+		<string>192.0.2.50</string>
+		<key>DOT_SERIAL</key>
+		<string>192.0.2.50:5555</string>
+		<key>DOT_ADB_ALLOW</key>
+		<string>192.0.2.20</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/YOU/Library/Logs/dot-voice.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOU/Library/Logs/dot-voice.err</string>
+</dict>
+</plist>

@@ -8,7 +8,7 @@ Tested on one Echo Dot 2nd gen, model RS03QR (codename biscuit), Fire OS 5.5.5.4
 
 Not affiliated with Amazon or xAI. The HTTP calls are the Grok Bot app's private API. They break when the app changes.
 
-You need three machines on the same LAN: the Dot, a Linux box that stays on, and a Mac that stays logged into the Grok Bot app. Python 3 on both computers. No extra Python packages. An agent adapting this to another LAN follows [AGENTS.md](AGENTS.md). The addresses in this repo are documentation (`192.0.2.0/24`). Replace them on the machines. Do not put real addresses back into the Python files.
+You need the Dot and one Mac on the same LAN. The Mac stays logged into the Grok Bot app, awake, and runs both the mint and the bridge. Python 3. No extra Python packages. A Linux box can run the bridge instead. That split is in [Bridge on Linux](#bridge-on-linux). This document's path is the Mac. An agent adapting this to another LAN follows [AGENTS.md](AGENTS.md). The addresses in this repo are documentation (`192.0.2.0/24`). Replace them on the machine. Do not put real addresses back into the Python files.
 
 ## 1. Unlock the Dot
 
@@ -70,7 +70,7 @@ adb tcpip 5555
 adb connect DOT_IP:5555
 ```
 
-Unplug USB. From the Linux box, `adb connect DOT_IP:5555` must print `connected`. One adb client holds this session. That client is the bridge. Port 5555 is a root shell.
+Unplug USB. From the Mac, `adb connect DOT_IP:5555` must print `connected`. One adb client holds this session. That client is the bridge. Port 5555 is a root shell. `adb` is [Android platform-tools](https://developer.android.com/tools/releases/platform-tools). On a Mac it is not part of the system.
 
 ## 4. Name the agent
 
@@ -90,7 +90,7 @@ prints `list-check ok` and does not talk to the app.
 
 ## 5. Mint on the Mac
 
-The mint serves loopback `127.0.0.1:19773`. The bridge reaches it over SSH. The bearer is not an xAI API key.
+The mint serves loopback `127.0.0.1:19773`. The bridge on this same Mac calls it directly. The bearer is not an xAI API key.
 
 ```sh
 mkdir -p ~/.config/dot-voice
@@ -109,38 +109,71 @@ Already loaded: `launchctl bootout gui/$(id -u)/com.example.dot-grok-mint`, then
 
 Done when `~/Library/Logs/dot-grok-mint.log` contains `listening 19773`.
 
-On the bridge, one key, no passphrase:
+## 6. Bridge on the same Mac
+
+`DOT_ADB_ALLOW` is this Mac's LAN address. Each entry is an IPv4 address. Anything else is refused before it can reach a shell on the Dot. Empty means 5555 stays open to the LAN. On a shared network, set the allow list.
+
+Leave `DOT_MINT_SSH` unset. The bridge reads `~/.config/dot-voice/mint.token` and calls `127.0.0.1:19773`.
+
+Edit `examples/com.example.dot-voice.plist`. Launchd does not expand `~`. `caffeinate -ims` keeps the Mac awake while the bridge runs. The Mac's own address goes in `DOT_ADB_ALLOW`.
+
+```sh
+cp examples/com.example.dot-voice.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.dot-voice.plist
+```
+
+Already loaded: `launchctl bootout gui/$(id -u)/com.example.dot-voice`, then bootstrap again.
+
+macOS blocks a LaunchAgent from the LAN until the binary is allowed under Privacy & Security → Local Network. A terminal on that Mac can `adb connect` while the agent log says `adb not connected` or `No route to host`. Allow Python, `adb`, and `caffeinate` (if it is the parent) and bootstrap again.
+
+Or run it in a terminal once:
+
+```sh
+export ADB=/usr/local/bin/adb
+export DOT_IP=192.0.2.50
+export DOT_SERIAL=192.0.2.50:5555
+export DOT_ADB_ALLOW=192.0.2.20
+python3 dot_voice.py
+```
+
+`python3 dot_voice.py --self-check` needs no Dot and no environment. It prints `self-check ok 22c3ec84`.
+
+Done when `~/Library/Logs/dot-voice.log` says `handset up. unmute opens the line. mute closes it.` Startup plays the lift click once, with no call open. That click is the speaker check.
+
+The bridge then installs iptables on the Dot: ACCEPT for `DOT_ADB_ALLOW`, DROP for everyone else. Those rules die when the Dot reboots and return the next time the bridge starts.
+
+## Bridge on Linux
+
+The mint cannot move. It reads the Mac keychain, and an SSH session cannot. A Linux box can own `adb` and the audio instead of the Mac. One adb client still. Stop the Mac bridge before the Linux one connects.
+
+On the Mac, the mint from section 5 stays up. Add one key from the Linux box, no passphrase:
 
 ```sh
 ssh-keygen -t ed25519 -f ~/.ssh/dot-mint -N ""
 ```
 
-On the Mac, one line in `~/.ssh/authorized_keys`. `restrict` turns off pty, forwarding, and a shell. `mint-client.sh` must be executable. `base64 -D` is the macOS flag, so this host is a Mac.
+On the Mac, one line in `~/.ssh/authorized_keys`. `restrict` turns off pty, forwarding, and a shell. `mint-client.sh` must be executable. `base64 -D` is the macOS flag.
 
 ```
 command="/Users/YOU/echo-dot-grok/mint-client.sh",restrict ssh-ed25519 AAAA... dot-bridge
 ```
 
-`AAAA...` is the contents of `~/.ssh/dot-mint.pub` from the bridge.
+`AAAA...` is the contents of `~/.ssh/dot-mint.pub`.
 
-From the bridge:
+From the Linux box:
 
 ```sh
-ssh -i ~/.ssh/dot-mint -o IdentitiesOnly=yes you@MAC_IP mint
+ssh -i ~/.ssh/dot-mint -o IdentitiesOnly=yes you@192.0.2.20 mint
 ```
 
 Done when that exits 0 and the body is one JSON object whose `websocketUrl` starts with `wss://`. That body is a call secret. Do not commit it, and do not paste it into a chat.
-
-## 6. Bridge on Linux
-
-`DOT_ADB_ALLOW` is the bridge's own LAN address, comma-separated if another host must keep adb. Each entry is an IPv4 address. Anything else is refused before it can reach a shell on the Dot. Empty means 5555 stays open to the LAN. On a shared network, set the allow list.
 
 ```sh
 mkdir -p ~/.config/systemd/user
 cp examples/dot-voice.service ~/.config/systemd/user/dot-voice.service
 ```
 
-Edit the copied unit. Replace `192.0.2.x`, `/usr/bin/adb` if adb lives elsewhere, `/home/you`, and the SSH user. Then:
+Edit the copied unit. Set `DOT_MINT_SSH`, `DOT_MINT_KEY`, `DOT_IP`, and `DOT_ADB_ALLOW` to the Linux box's own address. Then:
 
 ```sh
 systemctl --user daemon-reload
@@ -148,25 +181,7 @@ systemctl --user enable --now dot-voice.service
 loginctl enable-linger "$USER"
 ```
 
-Linger keeps the user service up after logout.
-
-Or run it in a terminal once:
-
-```sh
-export ADB=/usr/bin/adb
-export DOT_IP=192.0.2.50
-export DOT_SERIAL=192.0.2.50:5555
-export DOT_ADB_ALLOW=192.0.2.10
-export DOT_MINT_SSH=you@192.0.2.20
-export DOT_MINT_KEY=/home/you/.ssh/dot-mint
-python3 dot_voice.py
-```
-
-`python3 dot_voice.py --self-check` needs no Dot and no environment. It prints `self-check ok 22c3ec84`.
-
-Done when the log says `handset up. unmute opens the line. mute closes it.` Startup plays the lift click once, with no call open. That click is the speaker check.
-
-The bridge then installs iptables on the Dot: ACCEPT for `DOT_ADB_ALLOW`, DROP for everyone else. Those rules die when the Dot reboots and return the next time the bridge starts.
+Linger keeps the user service up after logout. With `DOT_MINT_SSH` set, the bridge uses SSH and ignores the local token.
 
 ## 7. Talk
 
@@ -186,10 +201,10 @@ A loud voice at the Dot can also cut a reply. A quiet voice from across the room
 
 | File | Runs on |
 | --- | --- |
-| `dot_voice.py` | the Linux bridge |
+| `dot_voice.py` | the Mac, next to the mint. A Linux box only if you split it |
 | `Dotd.java`, `Playd.java`, `dotd.dex` | the Dot, pushed at each start |
 | `mint_grok.py` | the Mac |
-| `mint-client.sh` | the Mac, as the forced SSH command |
+| `mint-client.sh` | the Mac, only when the bridge is on another machine |
 | `examples/` | placeholders |
 
 `Dotd` captures the mic at 16 kHz and reads the mute key. `Playd` plays 48 kHz in its own process. Fire OS kills an `app_process` that starts a second Java thread. Killing every `app_process` kills zygote.
@@ -217,7 +232,8 @@ mv out/classes.dex dotd.dex
 
 - `adb` on tcp/5555 is root. Allowlist it.
 - `~/.config/dot-voice/mint.token` is a bearer for loopback on the Mac.
-- The SSH key can mint a call and run one tool. With the forced command, it gets no shell.
+- With the bridge on the Mac, nothing remote can mint a call. The token stays on loopback.
+- With the bridge on Linux, that SSH key can mint a call and run one tool. With the forced command, it gets no shell.
 - The call secret stays in the bridge process for that call.
 - Keep `mint.token`, SSH private keys, `wpa` configs, and `~/Library/Application Support/Grok Bot/sand-secrets.json` out of git.
 - Unofficial endpoints, host `api2.cursor.sh`: `ListGrokBotAgents`, `DashboardService/GetMe`, `MintSandVoiceCallSecret`, `VoiceCallHarnessSession`, `VoiceCallHarnessTool`. The voice websocket is on `api.x.ai`. The mint returns the model. When this was written, that model was `grok-voice-synapse`.
