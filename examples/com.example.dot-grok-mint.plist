@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.example.dot-grok-mint</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/YOU/echo-dot-grok/mint_grok.py</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>GROK_AGENT_ID</key>
+		<string>00000000-0000-0000-0000-000000000000</string>
+		<key>GROK_AGENT_NAME</key>
+		<string>Your agent</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/YOU/Library/Logs/dot-grok-mint.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOU/Library/Logs/dot-grok-mint.err</string>
+</dict>
+</plist>

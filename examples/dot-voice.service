@@ -1,0 +1,19 @@
+[Unit]
+Description=Echo Dot handset. Unmute opens Grok voice. Mute hangs up.
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=ADB=/usr/bin/adb
+Environment=DOT_IP=192.0.2.50
+Environment=DOT_SERIAL=192.0.2.50:5555
+Environment=DOT_ADB_ALLOW=192.0.2.10
+Environment=DOT_MINT_SSH=you@192.0.2.20
+Environment=DOT_MINT_KEY=/home/you/.ssh/dot-mint
+WorkingDirectory=/home/you/echo-dot-grok
+ExecStart=/usr/bin/python3 /home/you/echo-dot-grok/dot_voice.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
