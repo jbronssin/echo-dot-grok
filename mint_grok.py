@@ -113,6 +113,36 @@ def account_name(token):
     return " ".join(parts)
 
 
+def agent_line(row):
+    # One public line: uuid, display name, voice. Nothing else from the row.
+    if not isinstance(row, dict):
+        return ""
+    agent_id = row.get("agentId")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        return ""
+    name = row.get("name")
+    if not isinstance(name, str) or not name.strip():
+        name = row.get("agentName") if isinstance(row.get("agentName"), str) else ""
+    name = " ".join(name.split())
+    if "@" in name or len(name) > 80:
+        name = ""
+    voice = row.get("voiceId") or "-"
+    if not isinstance(voice, str) or not voice.strip():
+        voice = "-"
+    return agent_id.strip() + "\t" + name + "\t" + voice.strip()
+
+
+def list_agents():
+    token = access_token()
+    body = post_json(LIST_URL, {}, token)
+    lines = []
+    for row in body.get("agents") or []:
+        line = agent_line(row)
+        if line:
+            lines.append(line)
+    return lines
+
+
 def agent_voice(token):
     require_agent()
     # Voice lives on the agent, not on the harness plan. null voiceId means
@@ -297,8 +327,23 @@ def main():
     server.serve_forever()
 
 
+def list_check():
+    assert agent_line({"agentId": "abc", "name": "Ada", "voiceId": "cosmo"}) == "abc\tAda\tcosmo"
+    assert agent_line({"agentId": "abc", "agentName": "Ada"}) == "abc\tAda\t-"
+    assert agent_line({"id": 1, "name": "Ada"}) == ""
+    assert agent_line({"agentId": "abc", "name": "a@b.example"}) == "abc\t\t-"
+    assert "instructions" not in agent_line({"agentId": "abc", "name": "Ada", "instructions": "secret"})
+    print("list-check ok")
+
+
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(0)
+    if "--list-agents" in sys.argv:
+        for line in list_agents():
+            print(line)
+    elif "--self-check" in sys.argv:
+        list_check()
+    else:
+        try:
+            main()
+        except KeyboardInterrupt:
+            sys.exit(0)

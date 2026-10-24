@@ -2,23 +2,15 @@
 
 Turn a 2016 Echo Dot into a Wi-Fi handset for a [Grok Bot](https://x.ai) voice agent.
 
-Unmute lifts the handset and opens a live voice call. Mute while the agent is talking cuts that reply and keeps the call open. Mute while it is only listening hangs up. Same idea as [this demo](https://x.com/MichaelGannotti/status/2113322549392159141): the Dot stays on the house Wi-Fi, and the button is the handset.
+Unmute lifts the handset and opens a live voice call. Mute while the agent is talking cuts that reply and keeps the call open. Mute while it is only listening hangs up. Same idea as [this demo](https://x.com/MichaelGannotti/status/2113322549392159141): the Dot stays on Wi-Fi, and the button is the handset.
 
 Tested on one Echo Dot 2nd gen, model RS03QR (codename biscuit), Fire OS 5.5.5.4, Android 5.1.1. Unlocked with [firebreak](https://github.com/bboe/firebreak), target `amonet-biscuit-v1.1.0-bboe`. Other Echo models do not have this unlock.
 
 Not affiliated with Amazon or xAI. The HTTP calls are the Grok Bot app's private API. They break when the app changes.
 
-## What you need
+You need three machines on the same LAN: the Dot, a Linux box that stays on, and a Mac that stays logged into the Grok Bot app. Python 3 on both computers. No extra Python packages. An agent adapting this to another LAN follows [AGENTS.md](AGENTS.md). The addresses in this repo are documentation (`192.0.2.0/24`). Replace them on the machines. Do not put real addresses back into the Python files.
 
-Three machines, all yours:
-
-1. The Dot, on the same LAN as the bridge. Do not finish setup in the Alexa app. A stock update can land a build firebreak cannot unlock.
-2. A Linux box on that LAN, left on. It owns wireless adb and the audio bridge. Python 3 from the OS. No extra packages.
-3. A Mac that stays logged into the Grok Bot app. The mint reads the keychain item "Grok Bot Safe Storage". A GUI session can read it. An SSH session cannot. The Mac does not carry the audio.
-
-Wake word and incoming calls are not in this repo. Each unmute starts a fresh call. Old chats are not copied in. The agent's own tools can look them up.
-
-## Root
+## 1. Unlock the Dot
 
 Once, over USB, from a machine with `adb`, `fastboot`, and `uv`:
 
@@ -26,64 +18,79 @@ Once, over USB, from a machine with `adb`, `fastboot`, and `uv`:
 uvx --system-certs firebreak@latest
 ```
 
-Use the biscuit target. When it boots, the Dot is rooted Fire OS with TWRP and Magisk.
+Use the biscuit target. Leave the Alexa app alone before and after. A stock update can land a build firebreak cannot unlock. Rooting erases the Dot, including Wi-Fi.
 
-Join Wi-Fi on the device. This repo does not store a network. Then:
+Done when `adb shell su -c id` prints `uid=0`.
+
+## 2. Put the Dot on Wi-Fi
+
+Still over USB. The Dot has `wpa_cli` and a config at `/data/misc/wifi/wpa_supplicant.conf`. That file already has the socket path. Append one network block. Leave the lines that are already there.
+
+On the computer, not on the Dot:
+
+```sh
+wpa_passphrase "Your SSID" 'your password' > /tmp/dot-net.txt
+```
+
+Open `/tmp/dot-net.txt` and delete the `#psk=` line. That line is the password in clear text. The `psk=` line under it is a hash. If `wpa_passphrase` is not installed and the password has no `"` or `\`, this block works instead:
+
+```
+network={
+    ssid="Your SSID"
+    psk="your password"
+    key_mgmt=WPA-PSK
+}
+```
+
+See which access point is 2.4 GHz. On the unit this was written for, 2.4 GHz joined and 5 GHz was flaky.
+
+```sh
+adb shell su -c 'ifconfig wlan0 up; wpa_cli -p /data/misc/wifi/sockets -i wlan0 scan'
+sleep 3
+adb shell su -c 'wpa_cli -p /data/misc/wifi/sockets -i wlan0 scan_results'
+```
+
+`scan` can print `FAIL-BUSY`. `scan_results` can still return rows. Then:
+
+```sh
+adb push /tmp/dot-net.txt /data/local/tmp/dot-net.txt
+adb shell su -c 'cat /data/local/tmp/dot-net.txt >> /data/misc/wifi/wpa_supplicant.conf && rm /data/local/tmp/dot-net.txt && chown wifi:wifi /data/misc/wifi/wpa_supplicant.conf && chmod 660 /data/misc/wifi/wpa_supplicant.conf && svc wifi enable && wpa_cli -p /data/misc/wifi/sockets -i wlan0 reconfigure && wpa_cli -p /data/misc/wifi/sockets -i wlan0 save_config'
+rm /tmp/dot-net.txt
+adb shell su -c 'wpa_cli -p /data/misc/wifi/sockets -i wlan0 status'
+```
+
+Done when `status` shows `wpa_state=COMPLETED` and an `ip_address`. The Dot may not answer ping. The IP in that status is `DOT_IP`.
+
+## 3. Wireless adb
+
+USB still plugged in:
 
 ```sh
 adb tcpip 5555
 adb connect DOT_IP:5555
 ```
 
-Port 5555 is a root shell. Set `DOT_ADB_ALLOW` to the bridge, and to any other host that should keep adb. The bridge installs an ACCEPT for each of those addresses and a DROP for everyone else. The rules die on reboot and come back the next time the bridge starts. Leave `DOT_ADB_ALLOW` empty and 5555 stays open on the LAN. Do not do that on a shared network.
+Unplug USB. From the Linux box, `adb connect DOT_IP:5555` must print `connected`. One adb client holds this session. That client is the bridge. Port 5555 is a root shell.
 
-One adb client holds the wireless session. That client should be the bridge.
+## 4. Name the agent
 
-## Layout
-
-| File | Runs on |
-| --- | --- |
-| `dot_voice.py` | the Linux bridge |
-| `Dotd.java`, `Playd.java`, `dotd.dex` | the Dot, pushed at each start |
-| `mint_grok.py` | the Mac, loopback `127.0.0.1:19773` |
-| `mint-client.sh` | the Mac, as a forced SSH command |
-| `examples/` | a user unit and a launchd agent, with placeholder addresses |
-
-`Dotd` captures the mic at 16 kHz and reads the mute key. `Playd` plays 48 kHz in its own process. Fire OS kills an `app_process` that starts a second Java thread. Do not kill zygote. Killing every `app_process` is killing zygote.
-
-## Build the dex
-
-`dotd.dex` matches the Java in this tree. Rebuild it when you change the Java. `javac` 17, `--release 8`, then `d8 --min-api 21`. `d8 --output` has to be a directory. It writes `classes.dex`. Rename that to `dotd.dex`.
+On the Mac, in a GUI session, with Grok Bot installed and logged in. The keychain item is "Grok Bot Safe Storage". An SSH session cannot read it.
 
 ```sh
-javac --release 8 -cp "$ANDROID_JAR" Dotd.java Playd.java
-mkdir -p out
-d8 --min-api 21 --output out Dotd.class Playd.class
-mv out/classes.dex dotd.dex
+python3 mint_grok.py --list-agents
 ```
 
-`ANDROID_JAR` is `android.jar` from an Android SDK platform (35 is enough). `d8` is in the SDK build-tools.
+Each line is `agentId`, the name shown in the app, and `voiceId`. A voice of `-` means the app default. The numeric `id` is a different field and is not printed. Copy the uuid into `GROK_AGENT_ID` and the name into `GROK_AGENT_NAME`.
 
-## Mint
-
-On the Mac, with Grok Bot installed and logged in.
-
-The agent id is a uuid on the agent row, field `agentId`. The numeric `id` is a different field. Voice is `voiceId` on that same row. Null means the app default: the mint omits `voice`.
-
-The list call is unofficial. It moves with the app:
-
-```
-POST https://api2.cursor.sh/aiserver.v1.GrokBotService/ListGrokBotAgents
-Authorization: Bearer <the app token>
-Content-Type: application/json
-Connect-Protocol-Version: 1
-
-{}
+```sh
+python3 mint_grok.py --self-check
 ```
 
-`mint_grok.py` already does this with the token it decrypts from the app. You only need the uuid and the display name.
+prints `list-check ok` and does not talk to the app.
 
-Create the bearer the bridge will send. It is not an xAI API key.
+## 5. Mint on the Mac
+
+The mint serves loopback `127.0.0.1:19773`. The bridge reaches it over SSH. The bearer is not an xAI API key.
 
 ```sh
 mkdir -p ~/.config/dot-voice
@@ -91,28 +98,59 @@ openssl rand -hex 32 > ~/.config/dot-voice/mint.token
 chmod 600 ~/.config/dot-voice/mint.token
 ```
 
-Copy this repo onto the Mac. Edit `examples/com.example.dot-grok-mint.plist`. Launchd does not expand `~`, so the path to `mint_grok.py` is absolute. Set `GROK_AGENT_ID` and `GROK_AGENT_NAME`. The name is the one shown in the app. The harness uses it. The bridge does not type it into a prompt.
-
-A GUI agent does not inherit your shell, so those two variables belong in the plist.
+Copy this repo onto the Mac. Edit `examples/com.example.dot-grok-mint.plist`: absolute path to `mint_grok.py` (launchd does not expand `~`), log paths, `GROK_AGENT_ID`, `GROK_AGENT_NAME`. A GUI agent does not inherit your shell, so the two variables belong in the plist.
 
 ```sh
 cp examples/com.example.dot-grok-mint.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.dot-grok-mint.plist
 ```
 
-It listens on `127.0.0.1:19773` only. A GET without the bearer returns 401. Logs say `mint ok`, the tool count, and the voice id. They do not print the call secret, the persona, or the receipt text.
+Already loaded: `launchctl bootout gui/$(id -u)/com.example.dot-grok-mint`, then bootstrap again.
 
-SSH from the Linux box must not get a shell. On the Mac, one key, forced command, in `~/.ssh/authorized_keys`:
+Done when `~/Library/Logs/dot-grok-mint.log` contains `listening 19773`.
+
+On the bridge, one key, no passphrase:
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/dot-mint -N ""
+```
+
+On the Mac, one line in `~/.ssh/authorized_keys`. `restrict` turns off pty, forwarding, and a shell. `mint-client.sh` must be executable. `base64 -D` is the macOS flag, so this host is a Mac.
 
 ```
 command="/Users/YOU/echo-dot-grok/mint-client.sh",restrict ssh-ed25519 AAAA... dot-bridge
 ```
 
-`restrict` turns off pty, forwarding, agent forwarding, and X11. `mint-client.sh` accepts `mint`, or `tool` plus one base64 JSON blob. `base64 -D` is the macOS flag, so the mint host is a Mac. Generate the keypair on the bridge and append only the public line. `chmod +x mint-client.sh`.
+`AAAA...` is the contents of `~/.ssh/dot-mint.pub` from the bridge.
 
-## Bridge
+From the bridge:
 
-Replace the documentation addresses (`192.0.2.0/24` is not a real LAN) and the paths:
+```sh
+ssh -i ~/.ssh/dot-mint -o IdentitiesOnly=yes you@MAC_IP mint
+```
+
+Done when that exits 0 and the body is one JSON object whose `websocketUrl` starts with `wss://`. That body is a call secret. Do not commit it, and do not paste it into a chat.
+
+## 6. Bridge on Linux
+
+`DOT_ADB_ALLOW` is the bridge's own LAN address, comma-separated if another host must keep adb. Each entry is an IPv4 address. Anything else is refused before it can reach a shell on the Dot. Empty means 5555 stays open to the LAN. On a shared network, set the allow list.
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp examples/dot-voice.service ~/.config/systemd/user/dot-voice.service
+```
+
+Edit the copied unit. Replace `192.0.2.x`, `/usr/bin/adb` if adb lives elsewhere, `/home/you`, and the SSH user. Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now dot-voice.service
+loginctl enable-linger "$USER"
+```
+
+Linger keeps the user service up after logout.
+
+Or run it in a terminal once:
 
 ```sh
 export ADB=/usr/bin/adb
@@ -124,62 +162,71 @@ export DOT_MINT_KEY=/home/you/.ssh/dot-mint
 python3 dot_voice.py
 ```
 
-`DOT_ADB_ALLOW` is a comma-separated list of IPv4 addresses. Anything else is refused before it can reach a shell on the Dot.
+`python3 dot_voice.py --self-check` needs no Dot and no environment. It prints `self-check ok 22c3ec84`.
 
-Or install `examples/dot-voice.service` as a user unit and edit the same values:
+Done when the log says `handset up. unmute opens the line. mute closes it.` Startup plays the lift click once, with no call open. That click is the speaker check.
 
-```sh
-systemctl --user enable --now dot-voice.service
-```
+The bridge then installs iptables on the Dot: ACCEPT for `DOT_ADB_ALLOW`, DROP for everyone else. Those rules die when the Dot reboots and return the next time the bridge starts.
 
-Startup plays the lift click once, with no call open. That is the speaker check.
+## 7. Talk
 
-```sh
-python3 dot_voice.py --self-check
-```
+Unmute. You hear the lift, the ring breathes cyan (`active-talking`), and the agent is on the line. Speak. Mute while it is only listening: heavier click, hangup, ring off. Mute while it is talking: the reply stops, the call stays open, no close click.
 
-needs no Dot and no environment. It prints `self-check ok 22c3ec84`.
+A loud voice at the Dot can also cut a reply. A quiet voice from across the room cannot. There is no echo canceller.
 
-## A call
+## If it stays silent
 
-Unmute plays a short lift and opens a Grok Bot voice session. The ring runs the registered pattern `active-talking` (a cyan breath) for the length of the call.
+- The button works and the speaker does not: `adb shell su -c 'setprop ctl.restart media'`, then restart the bridge so it sets the HD switch and the volume again.
+- Purple ring: the Dot was never finished in the Alexa app. Idle clears `anim_OOBE_start_error`. Restart the bridge and check `adb shell su -c '/system/bin/ledctrl --get_active_patterns'`. Idle is `off`.
+- `adb not connected`: another computer holds the wireless session. Close that session. The bridge connects.
+- Mint log says `mint fail`: Grok Bot is logged out, the GUI session cannot read the keychain, or the private API moved. The paths are in `mint_grok.py`.
+- Two spoken replies for one tool, or a tool result with no sound: say what the log printed (`reply`, `speak`, `said`) before changing `reply_gate`.
 
-Mute during playback cuts the reply, stays on the call, and plays no close click. A loud voice at the Dot can also cut: raw RMS 1600 for two 100 ms chunks. A quiet voice from across the room does not. There is no echo canceller. The mic is dropped while speaker audio is in flight, plus 0.8 s, so the bot does not hear the speaker.
+## What the pieces are
 
-Mute while the line is only listening plays a heavier set-down and hangs up. The ring goes idle. Idle also clears `anim_OOBE_start_error`. That pattern is the purple setup pulse on a Dot that was never finished in the Alexa app. Brightness is left alone.
+| File | Runs on |
+| --- | --- |
+| `dot_voice.py` | the Linux bridge |
+| `Dotd.java`, `Playd.java`, `dotd.dex` | the Dot, pushed at each start |
+| `mint_grok.py` | the Mac |
+| `mint-client.sh` | the Mac, as the forced SSH command |
+| `examples/` | placeholders |
 
-If the turn after a tool closes with no audio, the bridge asks once more, with a one-turn instruction to speak the tool result. A second silent close does not ask again. The log line is `speak`. A user turn with no tool and no audio is left alone. A follow-up that already played audio is not repeated.
-
-## Speaker settings that mattered
+`Dotd` captures the mic at 16 kHz and reads the mute key. `Playd` plays 48 kHz in its own process. Fire OS kills an `app_process` that starts a second Java thread. Killing every `app_process` kills zygote.
 
 Measured on this biscuit, card `mtsndcard`:
 
-- The `AudioTrack` buffer stays 32768 bytes. Under that, this Fire OS opens a DIRECT track and the cone underruns into static.
-- `Audio_I2S0dl1_hd_Switch` is `On` before the track opens. `Off` plays a tone as chopped blasts.
-- `PCM Playback Volume` is `115 115`. `100` is too quiet. `140` crackles. The volume is applied when the track opens. Changing it mid-playback does not silence the cone.
-- Mic is 16 kHz mono s16. The API session is 24 kHz. The speaker is 48 kHz. The bridge resamples.
-- `ledctrl --set_pattern=dialog-talk` prints success and does not stick. That name is not in `/system/etc/led-resources/layer_config_common.json`. `active-talking` is, and it stays until unset.
-- A wedged `mediaserver` leaves the button working and the speaker silent. `adb shell su -c 'setprop ctl.restart media'`, set the HD switch and the volume again, then restart the bridge.
+- `AudioTrack` buffer stays 32768 bytes. Under that, this Fire OS opens a DIRECT track and the cone underruns into static.
+- `Audio_I2S0dl1_hd_Switch` is `On` before the track opens. `Off` plays chopped blasts.
+- `PCM Playback Volume` is `115 115`. `100` is too quiet. `140` crackles. Volume applies when the track opens.
+- Mic 16 kHz, API session 24 kHz, speaker 48 kHz. The bridge resamples.
+- `ledctrl --set_pattern=dialog-talk` prints success and does not stick. That name is absent from `/system/etc/led-resources/layer_config_common.json`. `active-talking` stays until unset.
+
+Rebuild `dotd.dex` only when the Java changes. `javac` 17, `--release 8`, then `d8 --min-api 21`. `d8 --output` is a directory. It writes `classes.dex`. Rename that to `dotd.dex`.
+
+```sh
+javac --release 8 -cp "$ANDROID_JAR" Dotd.java Playd.java
+mkdir -p out
+d8 --min-api 21 --output out Dotd.class Playd.class
+mv out/classes.dex dotd.dex
+```
+
+`ANDROID_JAR` is `android.jar` from an Android SDK platform (35 is enough).
 
 ## Security
 
 - `adb` on tcp/5555 is root. Allowlist it.
-- `~/.config/dot-voice/mint.token` is a bearer for loopback on the Mac. The SSH key can mint a call and run one tool. With the forced command, it cannot open a shell.
-- The call secret is short-lived. It stays in the bridge process for that call. Do not log it.
-- Do not commit `mint.token`, SSH private keys, or `~/Library/Application Support/Grok Bot/sand-secrets.json`.
-- These endpoints are private and unofficial. Host `api2.cursor.sh`:
-  - `GrokBotService/ListGrokBotAgents`
-  - `DashboardService/GetMe`
-  - `GrokBotService/MintSandVoiceCallSecret`
-  - `GrokBotService/VoiceCallHarnessSession`
-  - `GrokBotService/VoiceCallHarnessTool`
-- The voice websocket is on `api.x.ai`. The mint returns the model. When this was written, that model was `grok-voice-synapse`.
+- `~/.config/dot-voice/mint.token` is a bearer for loopback on the Mac.
+- The SSH key can mint a call and run one tool. With the forced command, it gets no shell.
+- The call secret stays in the bridge process for that call.
+- Keep `mint.token`, SSH private keys, `wpa` configs, and `~/Library/Application Support/Grok Bot/sand-secrets.json` out of git.
+- Unofficial endpoints, host `api2.cursor.sh`: `ListGrokBotAgents`, `DashboardService/GetMe`, `MintSandVoiceCallSecret`, `VoiceCallHarnessSession`, `VoiceCallHarnessTool`. The voice websocket is on `api.x.ai`. The mint returns the model. When this was written, that model was `grok-voice-synapse`.
 
 ## Not in this repo
 
 - A wake word.
 - The agent calling you.
-- Resuming the open Grok Bot chat across unmute.
+- Resuming the open Grok Bot chat across unmute. Each unmute is a fresh call. The agent's own tools can look old chats up.
 - Echo cancellation.
 
 ## License
